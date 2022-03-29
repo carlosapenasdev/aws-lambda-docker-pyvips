@@ -1,28 +1,74 @@
-FROM public.ecr.aws/lambda/python:3.9
+FROM public.ecr.aws/lambda/python:3.9 as devTools
 
-#dependencias da LIB libvips
-RUN yum groupinstall -y "Development Tools"
-RUN yum -y gtk-doc \
-    libxml2-devel \
-    libjpeg-turbo-devel \
-    libpng-devel \
-    libtiff-devel \
-    libexif-devel \
-    libgsf-devel \
-    lcms-devel \
-    ImageMagick-devel \
-    gobject-introspection-devel \
-    libwebp-devel \
-    curl \
-    && yum clean all
+# general build stuff
+RUN yum update -y \
+	&& yum groupinstall -y "Development Tools" \
+	&& yum install -y wget tar
 
-RUN install_libvips_from_source "--prefix=/usr"
+# libvips needs libwebp 0.5 or later and the one on amazonlinux2 is 0.3.0, so
+# we have to build it ourselves
 
-COPY app.py requirements.txt ./
+# packages needed by libwebp
+RUN yum install -y \
+	libjpeg-devel \
+	libpng-devel \
+	libtiff-devel \
+	libgif-devel 
 
-RUN /var/lang/bin/python3.9 -m pip install --upgrade pip
+# stuff we need to build our own libvips ... this is a pretty basic selection
+# of dependencies, you'll want to adjust these
+# dzsave needs libgsf
+RUN yum install -y \
+	libpng-devel \
+	poppler-glib-devel \
+	glib2-devel \
+	libjpeg-devel \
+	expat-devel \
+	zlib-devel \
+	orc-devel \
+	lcms2-devel \
+	libexif-devel \
+	libgsf-devel
 
-RUN python3.9 -m pip install -r requirements.txt -t .
+# openslide is in epel -- extra packages for enterprise linux
+RUN yum install -y \
+	https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+RUN yum install -y \
+	openslide-devel 
+
+# non-standard stuff we build from source goes here
+ENV VIPSHOME /usr/local/vips
+ENV PKG_CONFIG_PATH $VIPSHOME/lib/pkgconfig
+
+ARG WEBP_VERSION=1.1.0
+ARG WEBP_URL=https://storage.googleapis.com/downloads.webmproject.org/releases/webp
+
+RUN cd /usr/local/src \
+	&& wget ${WEBP_URL}/libwebp-${WEBP_VERSION}.tar.gz \
+	&& tar xzf libwebp-${WEBP_VERSION}.tar.gz \
+	&& cd libwebp-${WEBP_VERSION} \
+	&& ./configure --enable-libwebpmux --enable-libwebpdemux \
+		--prefix=$VIPSHOME \
+	&& make V=0 \
+	&& make install
+
+ARG VIPS_VERSION=8.10.5
+ARG VIPS_URL=https://github.com/libvips/libvips/releases/download
+
+RUN cd /usr/local/src \
+	&& wget ${VIPS_URL}/v${VIPS_VERSION}/vips-${VIPS_VERSION}.tar.gz \
+	&& tar xzf vips-${VIPS_VERSION}.tar.gz \
+	&& cd vips-${VIPS_VERSION} \
+	&& ./configure --prefix=$VIPSHOME \
+	&& make V=0 \
+	&& make install
+
+# install pyvips
+RUN pip install pyvips
+
+FROM devTools as teste
+
+RUN pip freeze
 
 # Command can be overwritten by providing a different command in the template directly.
 CMD ["app.lambda_handler"]
